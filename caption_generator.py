@@ -10,7 +10,7 @@ import json
 import requests
 
 CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
-CLAUDE_MODEL = "claude-sonnet-4-5"
+CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
 
 
 def _image_to_base64(image_bytes: bytes, media_type: str = "image/jpeg") -> dict:
