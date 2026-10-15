@@ -2,6 +2,7 @@
 Instagram APIは画像の直接アップロードができず、公開URLが必須。
 このアプリでは保存機能を持たない方針なので、GitHubの公開リポジトリを
 「一時的な画像置き場」として使い、投稿に使うraw URLを発行する。
+投稿が終わったら delete_image_from_github で削除する。
 
 Threadsは image_url を渡さずテキストのみ、または image_url ありで
 投稿できるので、Threadsも画像付き投稿する場合は同じURLを使い回せる。
@@ -28,7 +29,7 @@ def upload_image_to_github(
     """
     画像をGitHubリポジトリにアップロードし、raw URLを返す。
 
-    戻り値: {"success": bool, "message": str, "url": str | None, "path": str | None}
+    戻り値: {"success": bool, "message": str, "url": str | None, "path": str | None, "sha": str | None}
     """
     try:
         timestamp = int(time.time())
@@ -50,9 +51,10 @@ def upload_image_to_github(
             timeout=30,
         )
         resp.raise_for_status()
+        sha = resp.json().get("content", {}).get("sha")
 
         raw_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
-        return {"success": True, "message": "画像をアップロードしました", "url": raw_url, "path": path}
+        return {"success": True, "message": "画像をアップロードしました", "url": raw_url, "path": path, "sha": sha}
 
     except requests.exceptions.HTTPError as e:
         detail = ""
@@ -60,6 +62,50 @@ def upload_image_to_github(
             detail = e.response.json().get("message", "")
         except Exception:
             pass
-        return {"success": False, "message": f"画像アップロードエラー: {detail or str(e)}", "url": None, "path": None}
+        return {"success": False, "message": f"画像アップロードエラー: {detail or str(e)}", "url": None, "path": None, "sha": None}
     except Exception as e:
-        return {"success": False, "message": f"画像アップロードエラー: {str(e)}", "url": None, "path": None}
+        return {"success": False, "message": f"画像アップロードエラー: {str(e)}", "url": None, "path": None, "sha": None}
+
+
+def delete_image_from_github(
+    github_token: str,
+    repo: str,
+    path: str,
+    sha: str | None = None,
+    branch: str = "main",
+) -> dict:
+    """
+    投稿が終わった画像をGitHubリポジトリから削除する。
+    sha が分からない時は、ファイル情報を取得してから削除する。
+
+    戻り値: {"success": bool, "message": str}
+    """
+    headers = {
+        "Authorization": f"Bearer {github_token}",
+        "Accept": "application/vnd.github+json",
+    }
+    url = f"{GITHUB_API_BASE}/repos/{repo}/contents/{path}"
+    try:
+        if not sha:
+            info_resp = requests.get(url, headers=headers, params={"ref": branch}, timeout=30)
+            info_resp.raise_for_status()
+            sha = info_resp.json().get("sha")
+
+        resp = requests.delete(
+            url,
+            headers=headers,
+            json={"message": f"delete posted image {path}", "sha": sha, "branch": branch},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return {"success": True, "message": "投稿に使った画像を削除しました"}
+
+    except requests.exceptions.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.response.json().get("message", "")
+        except Exception:
+            pass
+        return {"success": False, "message": f"画像の削除エラー: {detail or str(e)}"}
+    except Exception as e:
+        return {"success": False, "message": f"画像の削除エラー: {str(e)}"}
