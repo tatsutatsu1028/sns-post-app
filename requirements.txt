@@ -1,2 +1,4 @@
 streamlit
 requests
+anthropic>=1.0,<2
+Pillow

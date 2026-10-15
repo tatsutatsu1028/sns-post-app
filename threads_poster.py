@@ -12,11 +12,29 @@ import time
 THREADS_API_BASE = "https://graph.threads.net/v1.0"
 
 
-def post_to_threads(access_token: str, user_id: str, text: str, image_url: str | None = None) -> dict:
+def clean_topic_tag(topic: str) -> str:
+    """
+    Threadsのトピック（1投稿に1つだけ付けられるタグ）として使える形に整える。
+    先頭の # と、使えない文字（ピリオド・アンパサンド）を取り除き、50文字までにする。
+    """
+    topic = topic.strip().lstrip("#＃")
+    for ch in (".", "&", "。", "＆"):
+        topic = topic.replace(ch, "")
+    return topic.strip()[:50]
+
+
+def post_to_threads(
+    access_token: str,
+    user_id: str,
+    text: str,
+    image_url: str | None = None,
+    topic_tag: str = "",
+) -> dict:
     """
     Threadsに投稿する。
     image_url を渡すと画像付き投稿（公開URLが必要）、
     渡さなければテキストのみの投稿になる。
+    topic_tag を渡すと、その投稿にトピックを1つ付ける。
 
     戻り値: {"success": bool, "message": str, "post_id": str | None}
     """
@@ -31,6 +49,9 @@ def post_to_threads(access_token: str, user_id: str, text: str, image_url: str |
             create_params["image_url"] = image_url
         else:
             create_params["media_type"] = "TEXT"
+        topic_tag = clean_topic_tag(topic_tag)
+        if topic_tag:
+            create_params["topic_tag"] = topic_tag
 
         create_resp = requests.post(
             f"{THREADS_API_BASE}/{user_id}/threads",
