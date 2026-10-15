@@ -10,6 +10,17 @@ import requests
 import time
 
 FB_GRAPH_BASE = "https://graph.facebook.com/v21.0"
+IG_GRAPH_BASE = "https://graph.instagram.com/v21.0"
+
+
+def _api_base(access_token: str) -> str:
+    """
+    トークンの種類に合わせて接続先を選ぶ。
+    「Instagramログイン」で発行したトークン（IGで始まる）は graph.instagram.com、
+    「Facebookログイン」で発行したトークン（EAAで始まる）は graph.facebook.com でしか使えない。
+    違う方に送ると「Cannot parse access token」エラーになる。
+    """
+    return IG_GRAPH_BASE if access_token.startswith("IG") else FB_GRAPH_BASE
 
 
 def post_to_instagram(access_token: str, ig_user_id: str, caption: str, image_url: str) -> dict:
@@ -22,10 +33,15 @@ def post_to_instagram(access_token: str, ig_user_id: str, caption: str, image_ur
     if not image_url:
         return {"success": False, "message": "Instagram投稿には画像の公開URLが必要です", "post_id": None}
 
+    # Secretsに貼り付けた時に紛れ込みやすい空白・改行・引用符を取り除く
+    access_token = access_token.strip().strip('"').strip("'").strip()
+    ig_user_id = str(ig_user_id).strip()
+    api_base = _api_base(access_token)
+
     try:
         # Step 1: メディアコンテナを作成
         create_resp = requests.post(
-            f"{FB_GRAPH_BASE}/{ig_user_id}/media",
+            f"{api_base}/{ig_user_id}/media",
             params={
                 "access_token": access_token,
                 "image_url": image_url,
@@ -42,7 +58,7 @@ def post_to_instagram(access_token: str, ig_user_id: str, caption: str, image_ur
         # コンテナのステータスがFINISHEDになるまで待つ
         for _ in range(10):
             status_resp = requests.get(
-                f"{FB_GRAPH_BASE}/{creation_id}",
+                f"{api_base}/{creation_id}",
                 params={"access_token": access_token, "fields": "status_code"},
                 timeout=30,
             )
@@ -53,7 +69,7 @@ def post_to_instagram(access_token: str, ig_user_id: str, caption: str, image_ur
 
         # Step 2: 公開する
         publish_resp = requests.post(
-            f"{FB_GRAPH_BASE}/{ig_user_id}/media_publish",
+            f"{api_base}/{ig_user_id}/media_publish",
             params={"access_token": access_token, "creation_id": creation_id},
             timeout=30,
         )
