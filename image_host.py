@@ -7,10 +7,16 @@ Instagram APIは画像の直接アップロードができず、公開URLが必�
 Threadsは image_url を渡さずテキストのみ、または image_url ありで
 投稿できるので、Threadsも画像付き投稿する場合は同じURLを使い回せる。
 
+動画は raw URL だと種類（Content-Type）が application/octet-stream になり、
+Meta側で読み込めないことがある。GitHub Pages を有効にして GITHUB_PAGES_URL を
+設定すると、動画は Pages のURL（video/mp4 として配信される）を使う。
+
 必要な secrets:
   GITHUB_TOKEN        (repoスコープのPersonal Access Token)
   GITHUB_REPO         (例: "your-name/sns-post-images")
   GITHUB_BRANCH       (例: "main"。省略時は "main")
+任意の secrets:
+  GITHUB_PAGES_URL    (例: "https://your-name.github.io/sns-post-images")
 """
 import base64
 import time
@@ -25,15 +31,18 @@ def upload_image_to_github(
     image_bytes: bytes,
     filename_prefix: str = "post",
     branch: str = "main",
+    extension: str = "jpg",
+    pages_base_url: str | None = None,
 ) -> dict:
     """
-    画像をGitHubリポジトリにアップロードし、raw URLを返す。
+    画像（または動画）をGitHubリポジトリにアップロードし、公開URLを返す。
+    pages_base_url を渡すと GitHub Pages のURL、渡さなければ raw URL を返す。
 
     戻り値: {"success": bool, "message": str, "url": str | None, "path": str | None, "sha": str | None}
     """
     try:
         timestamp = int(time.time())
-        path = f"images/{filename_prefix}_{timestamp}.jpg"
+        path = f"images/{filename_prefix}_{timestamp}.{extension}"
 
         content_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
@@ -53,8 +62,11 @@ def upload_image_to_github(
         resp.raise_for_status()
         sha = resp.json().get("content", {}).get("sha")
 
-        raw_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
-        return {"success": True, "message": "画像をアップロードしました", "url": raw_url, "path": path, "sha": sha}
+        if pages_base_url:
+            url = f"{pages_base_url.rstrip('/')}/{path}"
+        else:
+            url = f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
+        return {"success": True, "message": "アップロードしました", "url": url, "path": path, "sha": sha}
 
     except requests.exceptions.HTTPError as e:
         detail = ""
@@ -65,6 +77,23 @@ def upload_image_to_github(
         return {"success": False, "message": f"画像アップロードエラー: {detail or str(e)}", "url": None, "path": None, "sha": None}
     except Exception as e:
         return {"success": False, "message": f"画像アップロードエラー: {str(e)}", "url": None, "path": None, "sha": None}
+
+
+def wait_until_public(url: str, timeout_seconds: int = 300, interval_seconds: int = 10) -> bool:
+    """
+    アップロードしたファイルがURLで見られるようになるまで待つ。
+    GitHub Pages は反映に1〜数分かかるため。見られるようになったら True。
+    """
+    deadline = time.time() + timeout_seconds
+    while True:
+        try:
+            if requests.head(url, timeout=15, allow_redirects=True).status_code == 200:
+                return True
+        except requests.exceptions.RequestException:
+            pass
+        if time.time() >= deadline:
+            return False
+        time.sleep(interval_seconds)
 
 
 def delete_image_from_github(
@@ -98,7 +127,7 @@ def delete_image_from_github(
             timeout=30,
         )
         resp.raise_for_status()
-        return {"success": True, "message": "投稿に使った画像を削除しました"}
+        return {"success": True, "message": "投稿に使ったファイルを削除しました"}
 
     except requests.exceptions.HTTPError as e:
         detail = ""
