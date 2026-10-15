@@ -17,6 +17,8 @@ import json
 import anthropic
 from PIL import Image, ImageOps
 
+from video_tools import extract_frames
+
 DEFAULT_MODEL = "claude-haiku-5-5"
 
 # Claudeへ送る前に、写真の長辺をこのピクセル数まで縮小する（費用を抑えるため）
@@ -24,6 +26,8 @@ MAX_IMAGE_EDGE = 1024
 JPEG_QUALITY = 80
 # 一度に送る写真の上限（多すぎると費用と時間がかかるため）
 MAX_IMAGES = 10
+# 一度に使う動画の上限（1本につき数枚の場面を切り出して送る）
+MAX_VIDEOS = 3
 
 # 1回の応答待ちの上限（秒）。再試行1回を含め、これを超えたら「作れませんでした」にする
 TIMEOUT_SECONDS = 40
@@ -42,10 +46,12 @@ PRICES_PER_MTOK = {
 USD_TO_JPY = 150
 
 SYSTEM_PROMPT = """あなたは旅行記のSNS投稿文を書くアシスタントです。
-ユーザーから届く写真とメモだけを材料に、Threads用とInstagram用の投稿文とハッシュタグを作ります。
+ユーザーから届く写真・動画とメモだけを材料に、Threads用とInstagram用の投稿文とハッシュタグを作ります。
+
+動画は、動画の最初から最後までを均等に切り出した数枚の場面として届く。場面の間に何があったかは分からないので、想像で補わない。
 
 【書き方のルール（必ず守る）】
-- 写真とメモから分からないことは書かない。想像で体験・感想・出来事・数字を足さない。
+- 写真・動画とメモから分からないことは書かない。想像で体験・感想・出来事・数字を足さない。
 - 場所の名前（国・街・店・施設・名所など）は、メモに書いてある時か、写真からはっきり分かる時（看板の文字や誰でも分かる有名な建物など）だけ書く。少しでも自信がなければ「海辺の街」「市場」のようにぼかして書く。
 - 写っている人が誰かを推測しない・書かない。人の名前・関係・年齢・国籍なども書かない。
 - 写真に写っている景色・食べ物・場所の雰囲気と、メモの内容を元に書く。
@@ -124,9 +130,10 @@ def generate_post(
     memo: str = "",
     images: list[bytes] | None = None,
     model: str = DEFAULT_MODEL,
+    videos: list[bytes] | None = None,
 ) -> dict:
     """
-    写真とメモから投稿文を作る。写真だけ・メモだけでもよい。
+    写真・動画とメモから投稿文を作る。写真だけ・動画だけ・メモだけでもよい。
 
     戻り値（成功時）:
       {"success": True, "threads_text", "threads_topic", "instagram_text",
@@ -136,29 +143,38 @@ def generate_post(
       {"success": False, "message": str, "detail": str}
     """
     images = images or []
+    videos = videos or []
     memo = memo.strip()
-    if not images and not memo:
-        return {"success": False, "message": "写真かメモのどちらかを入れてください", "detail": ""}
+    if not images and not videos and not memo:
+        return {"success": False, "message": "写真・動画かメモのどれかを入れてください", "detail": ""}
+
+    def image_block(image_bytes: bytes) -> dict:
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": base64.standard_b64encode(shrink_image(image_bytes)).decode("utf-8"),
+            },
+        }
 
     try:
         content = []
         for i, image_bytes in enumerate(images[:MAX_IMAGES], start=1):
             content.append({"type": "text", "text": f"写真{i}:"})
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/jpeg",
-                    "data": base64.standard_b64encode(shrink_image(image_bytes)).decode("utf-8"),
-                },
-            })
+            content.append(image_block(image_bytes))
+        for i, video_bytes in enumerate(videos[:MAX_VIDEOS], start=1):
+            frames = extract_frames(video_bytes)
+            for j, frame in enumerate(frames, start=1):
+                content.append({"type": "text", "text": f"動画{i}の場面{j}/{len(frames)}:"})
+                content.append(image_block(frame))
 
         if memo:
             request_text = f"メモ:\n<memo>\n{memo}\n</memo>\n\n"
         else:
-            request_text = "メモ: なし（写真だけを材料にしてください）\n\n"
-        if not images:
-            request_text += "写真: なし（メモだけを材料にしてください）\n\n"
+            request_text = "メモ: なし（写真・動画だけを材料にしてください）\n\n"
+        if not images and not videos:
+            request_text += "写真・動画: なし（メモだけを材料にしてください）\n\n"
         request_text += "この材料で、旅行記の投稿文を作ってください。"
         content.append({"type": "text", "text": request_text})
 
@@ -186,7 +202,7 @@ def generate_post(
     except anthropic.APIConnectionError:
         return _failed("Claudeに接続できませんでした")
     except Exception as e:
-        return _failed(f"写真の読み込みなどでエラーが起きました: {e}")
+        return _failed(f"写真・動画の読み込みなどでエラーが起きました: {e}")
 
     if response.stop_reason == "refusal":
         return _failed("Claudeがこの内容での作成を断りました")

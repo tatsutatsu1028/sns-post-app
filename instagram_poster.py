@@ -37,15 +37,21 @@ def _token_hint(access_token: str, api_base: str) -> str:
     return hint
 
 
-def post_to_instagram(access_token: str, ig_user_id: str, caption: str, image_url: str) -> dict:
+def post_to_instagram(
+    access_token: str,
+    ig_user_id: str,
+    caption: str,
+    image_url: str | None = None,
+    video_url: str | None = None,
+) -> dict:
     """
-    Instagramに画像投稿する。
-    Instagram APIは画像の直接アップロード不可のため、公開URL（image_url）が必須。
+    Instagramに画像、または動画（リール）を投稿する。
+    Instagram APIはファイルの直接アップロード不可のため、公開URL（image_url か video_url）が必須。
 
     戻り値: {"success": bool, "message": str, "post_id": str | None}
     """
-    if not image_url:
-        return {"success": False, "message": "Instagram投稿には画像の公開URLが必要です", "post_id": None}
+    if not image_url and not video_url:
+        return {"success": False, "message": "Instagram投稿には写真か動画の公開URLが必要です", "post_id": None}
 
     # Secretsに貼り付けた時に紛れ込みやすい空白・改行・引用符を取り除く
     access_token = access_token.strip().strip('"').strip("'").strip()
@@ -54,13 +60,16 @@ def post_to_instagram(access_token: str, ig_user_id: str, caption: str, image_ur
 
     try:
         # Step 1: メディアコンテナを作成
+        create_params = {"access_token": access_token, "caption": caption}
+        if video_url:
+            create_params["media_type"] = "REELS"
+            create_params["video_url"] = video_url
+            create_params["share_to_feed"] = "true"
+        else:
+            create_params["image_url"] = image_url
         create_resp = requests.post(
             f"{api_base}/{ig_user_id}/media",
-            params={
-                "access_token": access_token,
-                "image_url": image_url,
-                "caption": caption,
-            },
+            params=create_params,
             timeout=30,
         )
         create_resp.raise_for_status()
@@ -69,17 +78,25 @@ def post_to_instagram(access_token: str, ig_user_id: str, caption: str, image_ur
         if not creation_id:
             return {"success": False, "message": "コンテナ作成に失敗しました", "post_id": None}
 
-        # コンテナのステータスがFINISHEDになるまで待つ
-        for _ in range(10):
+        # コンテナのステータスがFINISHEDになるまで待つ（動画は処理に時間がかかる）
+        wait_times = [5] * 60 if video_url else [2] * 10
+        for wait in wait_times:
             status_resp = requests.get(
                 f"{api_base}/{creation_id}",
-                params={"access_token": access_token, "fields": "status_code"},
+                params={"access_token": access_token, "fields": "status_code,status"},
                 timeout=30,
             )
-            status = status_resp.json().get("status_code")
+            status_data = status_resp.json()
+            status = status_data.get("status_code")
             if status == "FINISHED":
                 break
-            time.sleep(2)
+            if status in ("ERROR", "EXPIRED"):
+                detail = status_data.get("status") or status
+                return {"success": False, "message": f"Instagram投稿エラー: 動画の処理に失敗しました（{detail}）", "post_id": None}
+            time.sleep(wait)
+        else:
+            if video_url:
+                return {"success": False, "message": "Instagram投稿エラー: 動画の処理が時間内に終わりませんでした", "post_id": None}
 
         # Step 2: 公開する
         publish_resp = requests.post(
