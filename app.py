@@ -19,7 +19,7 @@ CLAUDE_TEXT_MODEL = "claude-haiku-5-5"   # 任意。省略時は Haiku
 import streamlit as st
 from threads_poster import post_to_threads
 from instagram_poster import post_to_instagram
-from image_host import upload_image_to_github
+from image_host import delete_image_from_github, upload_image_to_github
 from caption_generator import DEFAULT_MODEL, MAX_IMAGES, USD_TO_JPY, generate_post
 
 THREADS_MAX_CHARS = 500
@@ -197,6 +197,7 @@ if st.button("投稿する", type="primary", use_container_width=True):
         st.stop()
 
     image_url = None
+    uploaded = None
 
     # 画像がある場合は先にGitHubへアップロードしてURL化
     if post_image:
@@ -211,32 +212,50 @@ if st.button("投稿する", type="primary", use_container_width=True):
                 st.error(upload_result["message"])
                 st.stop()
             image_url = upload_result["url"]
+            uploaded = upload_result
 
-    # Threads投稿
-    if post_to_threads_checked:
-        with st.spinner("Threadsに投稿中..."):
-            result = post_to_threads(
-                access_token=st.secrets["THREADS_ACCESS_TOKEN"],
-                user_id=st.secrets["THREADS_USER_ID"],
-                text=threads_text.strip(),
-                image_url=image_url,
-                topic_tag=threads_topic,
-            )
-            if result["success"]:
-                st.success(result["message"])
-            else:
-                st.error(result["message"])
+    try:
+        # Threads投稿
+        if post_to_threads_checked:
+            with st.spinner("Threadsに投稿中..."):
+                result = post_to_threads(
+                    access_token=st.secrets["THREADS_ACCESS_TOKEN"],
+                    user_id=st.secrets["THREADS_USER_ID"],
+                    text=threads_text.strip(),
+                    image_url=image_url,
+                    topic_tag=threads_topic,
+                )
+                if result["success"]:
+                    st.success(result["message"])
+                else:
+                    st.error(result["message"])
 
-    # Instagram投稿
-    if post_to_instagram_checked:
-        with st.spinner("Instagramに投稿中..."):
-            result = post_to_instagram(
-                access_token=st.secrets["IG_ACCESS_TOKEN"],
-                ig_user_id=st.secrets["IG_USER_ID"],
-                caption=instagram_caption,
-                image_url=image_url,
-            )
-            if result["success"]:
-                st.success(result["message"])
+        # Instagram投稿
+        if post_to_instagram_checked:
+            with st.spinner("Instagramに投稿中..."):
+                result = post_to_instagram(
+                    access_token=st.secrets["IG_ACCESS_TOKEN"],
+                    ig_user_id=st.secrets["IG_USER_ID"],
+                    caption=instagram_caption,
+                    image_url=image_url,
+                )
+                if result["success"]:
+                    st.success(result["message"])
+                else:
+                    st.error(result["message"])
+    finally:
+        # 保存しない方針なので、投稿が終わったら（失敗した時も）画像を削除する。
+        # 投稿は公開した時点でThreads/Instagram側に取り込まれているので、消しても投稿は残る。
+        if uploaded:
+            with st.spinner("投稿に使った画像を削除中..."):
+                delete_result = delete_image_from_github(
+                    github_token=st.secrets["GITHUB_TOKEN"],
+                    repo=st.secrets["GITHUB_REPO"],
+                    path=uploaded["path"],
+                    sha=uploaded.get("sha"),
+                    branch=st.secrets.get("GITHUB_BRANCH", "main"),
+                )
+            if delete_result["success"]:
+                st.caption(f"🗑️ {delete_result['message']}")
             else:
-                st.error(result["message"])
+                st.warning(f"{delete_result['message']}（GitHubのリポジトリから手動で消してください: {uploaded['path']}）")
