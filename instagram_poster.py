@@ -23,6 +23,20 @@ def _api_base(access_token: str) -> str:
     return IG_GRAPH_BASE if access_token.startswith("IG") else FB_GRAPH_BASE
 
 
+def _token_hint(access_token: str, api_base: str) -> str:
+    """
+    トークンの問題を調べるためのヒント。トークン本体は出さず、
+    先頭4文字・長さ・接続先・おかしな文字が混ざっていないかだけを表示する。
+    """
+    host = api_base.split("/")[2]
+    hint = f"接続先: {host} ／ トークン: 「{access_token[:4]}…」で始まる{len(access_token)}文字"
+    if access_token.startswith("your-"):
+        hint += " ／ ⚠️ Secretsの値がひな形のままです"
+    elif any(c.isspace() for c in access_token) or not access_token.isascii():
+        hint += " ／ ⚠️ トークンの途中に空白・改行・全角文字が混ざっています"
+    return hint
+
+
 def post_to_instagram(access_token: str, ig_user_id: str, caption: str, image_url: str) -> dict:
     """
     Instagramに画像投稿する。
@@ -84,6 +98,9 @@ def post_to_instagram(access_token: str, ig_user_id: str, caption: str, image_ur
             detail = e.response.json().get("error", {}).get("message", "")
         except Exception:
             pass
-        return {"success": False, "message": f"Instagram投稿エラー: {detail or str(e)}", "post_id": None}
+        message = f"Instagram投稿エラー: {detail or str(e)}"
+        if "access token" in detail.lower():
+            message += f"（{_token_hint(access_token, api_base)}）"
+        return {"success": False, "message": message, "post_id": None}
     except Exception as e:
         return {"success": False, "message": f"Instagram投稿エラー: {str(e)}", "post_id": None}
